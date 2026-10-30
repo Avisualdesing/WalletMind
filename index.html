@@ -391,7 +391,7 @@ let ls, memOnly = false;
 try { localStorage.setItem("__wm", "1"); localStorage.removeItem("__wm"); ls = localStorage; }
 catch (e) { const m = {}; memOnly = true; ls = { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: (k) => { delete m[k]; } }; }
 
-const defPlan = () => ({ inc: null, exp: null, target: 0, months: 0, got: 0, start: "", startTs: 0, dbudget: 0, dstrat: "av" });
+const defPlan = () => ({ inc: null, exp: null, target: 0, months: 0, got: 0, start: "", startTs: 0, dbudget: 0, dstrat: "av", pace: "d", remFreq: "d", remTime: "20:00", remDow: 1 });
 const S = { plan: defPlan(), tx: [], bud: {}, goal: 0, perf: 0, debts: [], pays: [], cur: "USD", theme: "system", range: "month", q: "", priv: false, flash: null };
 const KEYMAP = { tx: K.tx, bud: K.bud, goal: K.goal, perf: K.perf, debts: K.debts, pays: K.pays, cur: K.cur, theme: K.theme, plan: K.plan };
 
@@ -787,6 +787,46 @@ function askCard() {
   if (!AI) return "";
   return '<section class="sec"><button class="card" style="display:block;width:100%;text-align:left" data-a="ask"><div class="row"><span class="ico" style="--h:290">✨</span><div class="grow"><div class="ttl">Pregúntale a tu asistente</div><div class="sub">Cómo y qué ahorrar, con tus números</div></div>' + ic("chev") + "</div></button></section>";
 }
+function weekRange() { const n = new Date(), dow = (n.getDay() + 6) % 7, a = new Date(n.getFullYear(), n.getMonth(), n.getDate() - dow), b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6); return [localIso(a), localIso(b), 6 - dow]; }
+const isSaving = (t) => t.transfer || (t.type === "expense" && t.categoryId === "savings");
+function paceData(P, amt) {
+  const today = todayIso(), wr = weekRange(), sum = (a, b) => S.tx.reduce((s2, t) => s2 + (isSaving(t) && t.date >= a && t.date <= b ? t.amount : 0), 0);
+  const days = new Set(S.tx.filter(isSaving).map((t) => t.date)); let streak = 0; const c = new Date(); if (!days.has(localIso(c))) c.setDate(c.getDate() - 1);
+  while (days.has(localIso(c))) { streak++; c.setDate(c.getDate() - 1); }
+  return { dGoal: amt / P.dim, wGoal: (amt * 7) / P.dim, day: sum(today, today), week: sum(wr[0], wr[1]), left: wr[2], streak };
+}
+function paceCard(P, amt) {
+  if (!(amt > 0)) return "";
+  const d = paceData(P, amt), wk = S.plan.pace === "w", goal = wk ? d.wGoal : d.dGoal, done = wk ? d.week : d.day, rem = Math.max(0, goal - done), pct = Math.min(100, (done / goal) * 100), left = d.left + 1;
+  const msg = rem <= 0 ? "🎉 ¡Meta " + (wk ? "de la semana" : "de hoy") + " cumplida!" : wk ? "Te faltan " + fmt(rem) + ". Quedan " + left + (left === 1 ? " día" : " días") + ": " + fmt(rem / left) + " por día." : "Te faltan " + fmt(rem) + " para cumplir hoy.";
+  return '<section class="sec"><div class="sec-h"><h2>Mi ritmo</h2>' + (d.streak > 0 ? '<span class="badge o">🔥 ' + d.streak + (d.streak === 1 ? " día seguido" : " días seguidos") + "</span>" : "") + '</div><div class="card">' + seg("pace", [["d", "Hoy"], ["w", "Esta semana"]], wk ? "w" : "d", "pace") +
+    '<div class="row" style="justify-content:space-between;align-items:baseline;margin-top:14px"><div class="amt" style="font-size:1.6rem;letter-spacing:-.03em">' + fmt(done) + '</div><div class="sub">de ' + fmt(goal) + '</div></div><div class="bar g" style="margin-top:10px"><i style="width:' + pct + '%"></i></div><p class="hint">' + msg + '</p><button class="btn ' + (rem > 0 ? "primary" : "ghost") + '" style="width:100%;margin-top:12px" data-a="pacesave">' + (rem > 0 ? "Apartar ahora" : "Apartar un poco más") + "</button></div></section>";
+}
+const DOWS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"], DOWC = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+function remCard(P, amt) {
+  const pl = S.plan, wk = pl.remFreq === "w", each = wk ? (amt * 7) / P.dim : amt / P.dim;
+  return '<section class="sec"><div class="sec-h"><h2>Recordatorios</h2></div><div class="card"><p class="sub wrap" style="margin:0 0 12px">Pídele al iPhone que te avise para ahorrar. Se crea en tu app Calendario y suena aunque WalletMind esté cerrada.</p>' + seg("rem", [["d", "Cada día"], ["w", "Cada semana"]], wk ? "w" : "d", "rem") +
+    '<div class="f2"><div class="field"><label for="r-time">Hora</label><input id="r-time" type="time" value="' + esc(pl.remTime || "20:00") + '" data-ch="remtime"></div>' + (wk ? '<div class="field"><label for="r-dow">Día</label><select id="r-dow" data-ch="remdow">' + DOWS.map((n, i) => '<option value="' + i + '"' + (i === pl.remDow ? " selected" : "") + ">" + n + "</option>").join("") + "</select></div>" : "") + "</div>" +
+    '<button class="btn primary" style="width:100%;margin-top:14px" data-a="remmake">Crear recordatorio en el Calendario</button><p class="hint">' + (each > 0 ? "El aviso dirá: «Ahorra " + fmt(each) + (wk ? " esta semana" : " hoy") + "». Si cambias tu meta, créalo otra vez. " : "") + "Se abrirá el menú de compartir: elige Calendario. Si no aparece, elige «Guardar en Archivos», abre el archivo y toca «Añadir todo».</p></div></section>";
+}
+const icsEsc = (t) => String(t).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+function buildIcs(each, daily) {
+  const pl = S.plan, pad = (n) => String(n).padStart(2, "0"), loc = (d) => d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "T" + pad(d.getHours()) + pad(d.getMinutes()) + "00";
+  const utc = (d) => d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate()) + "T" + pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + pad(d.getUTCSeconds()) + "Z";
+  const hm = String(pl.remTime || "20:00").split(":"), now = new Date(), st = new Date(now.getFullYear(), now.getMonth(), now.getDate(), Number(hm[0]) || 20, Number(hm[1]) || 0, 0);
+  if (daily) { if (st <= now) st.setDate(st.getDate() + 1); }
+  else { st.setDate(st.getDate() + ((pl.remDow - st.getDay() + 7) % 7)); if (st <= now) st.setDate(st.getDate() + 7); }
+  const title = "💰 Ahorra " + fmt(each) + (daily ? " hoy" : " esta semana"), url = location.protocol.indexOf("http") === 0 ? location.href.split("#")[0] : "";
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//WalletMind//ES", "CALSCALE:GREGORIAN", "BEGIN:VEVENT", "UID:wm-" + Date.now() + "@walletmind", "DTSTAMP:" + utc(now), "DTSTART:" + loc(st), "DTEND:" + loc(new Date(st.getTime() + 15 * 60000)),
+    "RRULE:" + (daily ? "FREQ=DAILY" : "FREQ=WEEKLY;BYDAY=" + DOWC[pl.remDow]), "SUMMARY:" + icsEsc(title), "DESCRIPTION:" + icsEsc("Abre WalletMind y registra tu ahorro. Meta " + (daily ? "diaria" : "semanal") + ": " + fmt(each) + "."), url ? "URL:" + url : "",
+    "BEGIN:VALARM", "TRIGGER:PT0M", "ACTION:DISPLAY", "DESCRIPTION:" + icsEsc(title), "END:VALARM", "END:VEVENT", "END:VCALENDAR"].filter(Boolean).join("\r\n") + "\r\n";
+}
+async function saveIcs(text, name) {
+  const file = new File([text], name, { type: "text/calendar" });
+  try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "Recordatorio de WalletMind" }); return "share"; } } catch (e) { if (e && e.name === "AbortError") return "cancel"; }
+  try { const dl = window.claude && window.claude.use ? await window.claude.use("downloads") : null; if (dl) { await dl.save({ filename: name, data: text }); return "dl"; } } catch (e) { if (e && e.code === "declined") return "cancel"; }
+  try { const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove(); return "a"; } catch (e) { return "fail"; }
+}
 function numsCard(P) {
   const manual = S.plan.inc != null || S.plan.exp != null;
   return '<section class="sec"><div class="sec-h"><h2>Mis ingresos y gastos al mes</h2><button class="link" data-a="nums">Editar ' + ic("chev") + '</button></div><div class="card"><div class="kv"><span>Ingresos</span><span>' + fmt(P.income) + '</span></div><div class="kv"><span>Gastos</span><span>' + fmt(P.exp) + '</span></div><div class="kv"><span>Te sobran</span><span style="color:' + (P.room >= 0 ? "var(--ok)" : "var(--danger)") + '">' + fmt(P.room) + '</span></div><p class="hint">' + (manual ? "Usando los números que escribiste, no los de tus movimientos." : "Ahora uso lo que has registrado. Si prefieres, escribe más o menos cuánto ganas y gastas en un mes normal; no tiene que ser exacto.") + '</p><button class="btn ' + (manual ? "ghost" : "primary") + '" style="width:100%;margin-top:12px" data-a="nums">' + (manual ? "Cambiar mis números" : "Escribir cuánto gano y gasto al mes") + "</button></div></section>";
@@ -941,7 +981,7 @@ VIEWS.ahorro = function () {
     '<div class="three"><div><div class="k"><b style="background:oklch(0.72 0.16 22)"></b>Gastos</div><div class="v">' + fmtC(P.exp) + '</div></div><div><div class="k"><b style="background:var(--gold)"></b>Ahorro</div><div class="v">' + fmtC(amt) + '</div></div><div><div class="k"><b style="background:var(--glow)"></b>Libre</div><div class="v">' + fmtC(Math.max(0, P.income - P.exp - amt)) + "</div></div></div>" + fit +
     '<div style="margin-top:20px"><div class="row" style="justify-content:space-between;font-size:13px;color:rgb(255 255 255 / .72)"><span>Este mes llevas ' + fmt(P.saved) + "</span><span>" + Math.round(pct) + '%</span></div><div class="split" style="margin-top:8px"><i style="width:' + pct + '%;background:var(--gold)"></i></div><p class="lbl" style="margin-top:8px;font-size:13px">' + (amt <= 0 ? "Tus gastos igualan tu ingreso: empieza por los consejos de abajo." : rem > 0 ? "Te faltan " + fmt(rem) + " este mes: son " + fmt(rem / wk) + " por semana." : "¡Meta del mes cumplida! 🎉") + "</p></div>" +
     '<div class="actions h" style="margin-top:16px"><button class="btn gold" data-a="save-now">' + (rem > 0 ? "Registrar ahorro" : "Ahorrar más") + "</button>" + (H.kind === "rec" && amt > 0 ? '<button class="btn ghostw" data-a="use-goal">Usar como meta</button>' : "") + "</div></div>";
-  out += askCard() + numsCard(P) + goalSection(P);
+  out += paceCard(P, amt) + numsCard(P) + goalSection(P) + remCard(P, amt) + askCard();
   out += '<section class="sec"><div class="sec-h"><h2>Elige tu nivel</h2><button class="link" data-a="goal">Meta manual ' + ic("chev") + '</button></div><div class="card list">' + P.lv.map((l, i) => {
     const mine = S.goal > 0 && Math.abs(S.goal - l.amt) < 0.5;
     return '<button class="row item" data-a="lvl" data-v="' + l.amt + '"><span class="ico" style="--h:' + [150, 165, 85][i] + '">' + ["🌿", "🌱", "🚀"][i] + '</span><div class="grow"><div class="ttl">' + l.n + " · " + l.p + '%</div><div class="sub">' + (l.ok ? "Te quedan " + fmtC(P.income - l.amt) + " para gastos" : "Tus gastos típicos (" + fmtC(P.exp) + ") no caben") + '</div></div><div style="text-align:right"><div class="amt">' + fmt(l.amt) + "</div>" + (mine ? '<span class="badge o">Tu meta</span>' : l.ok ? '<span class="badge">Alcanza</span>' : '<span class="badge w">Ajustado</span>') + "</div></button>";
@@ -1284,6 +1324,15 @@ const ACT = {
   nums() { openNums(); },
   gset() { openGoal(); },
   gadd() { openTx(null, { mode: "expense", cat: "savings", amount: "" }); },
+  pace(el) { S.plan.pace = el.dataset.v === "w" ? "w" : "d"; persist("plan"); render(); },
+  rem(el) { S.plan.remFreq = el.dataset.v === "w" ? "w" : "d"; persist("plan"); render(); },
+  pacesave() { const P = planData(), H = heroInfo(P), d = paceData(P, H.amt), wk = S.plan.pace === "w", rem = Math.max(0, (wk ? d.wGoal - d.week : d.dGoal - d.day)); openTx(null, { mode: "expense", cat: "savings", amount: rem > 0 ? String(r2(wk ? rem / (d.left + 1) : rem)) : "" }); },
+  async remmake() {
+    const P = planData(), H = heroInfo(P), daily = S.plan.remFreq !== "w", each = daily ? H.amt / P.dim : (H.amt * 7) / P.dim;
+    if (!(each > 0)) return toast("Primero define cuánto quieres ahorrar");
+    const r = await saveIcs(buildIcs(r2(each), daily), "walletmind-recordatorio.ics");
+    if (r === "fail") toast("No se pudo crear el recordatorio en este navegador"); else if (r !== "cancel") toast("Listo: añádelo al Calendario");
+  },
   gnow() { const g = goalInfo(planData()); if (!g) return; S.goal = r2(g.need); persist("goal"); render(); toast("Meta mensual: " + fmt(S.goal)); },
   ask() { openChat(); },
   undo() { if (toast.undo) { toast.undo(); toast.undo = null; $("#toast").classList.remove("in"); } },
@@ -1345,6 +1394,8 @@ document.addEventListener("input", (e) => {
   if (cur && cur.onInput) cur.onInput(e);
 });
 document.addEventListener("change", (e) => {
+  if (e.target.dataset && e.target.dataset.ch === "remtime") { S.plan.remTime = e.target.value || "20:00"; persist("plan"); return; }
+  if (e.target.dataset && e.target.dataset.ch === "remdow") { S.plan.remDow = Number(e.target.value) || 0; persist("plan"); return; }
   if (e.target.dataset && e.target.dataset.ch === "cur") { S.cur = e.target.value; persist("cur"); render(); toast("Moneda: " + S.cur); return; }
   if (cur && cur.onInput) cur.onInput(e);
 });
