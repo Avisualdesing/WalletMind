@@ -391,7 +391,7 @@ let ls, memOnly = false;
 try { localStorage.setItem("__wm", "1"); localStorage.removeItem("__wm"); ls = localStorage; }
 catch (e) { const m = {}; memOnly = true; ls = { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: (k) => { delete m[k]; } }; }
 
-const defPlan = () => ({ inc: null, exp: null, target: 0, months: 0, got: 0, start: "", dbudget: 0, dstrat: "av" });
+const defPlan = () => ({ inc: null, exp: null, target: 0, months: 0, got: 0, start: "", startTs: 0, dbudget: 0, dstrat: "av" });
 const S = { plan: defPlan(), tx: [], bud: {}, goal: 0, perf: 0, debts: [], pays: [], cur: "USD", theme: "system", range: "month", q: "", priv: false, flash: null };
 const KEYMAP = { tx: K.tx, bud: K.bud, goal: K.goal, perf: K.perf, debts: K.debts, pays: K.pays, cur: K.cur, theme: K.theme, plan: K.plan };
 
@@ -617,8 +617,8 @@ function ring(pct, color) {
   return '<svg class="ring" viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="18" fill="none" stroke="var(--muted)" stroke-width="5"/><circle class="rp" cx="22" cy="22" r="18" fill="none" stroke="' + color + '" stroke-width="5" stroke-linecap="round" stroke-dasharray="' + C + '" stroke-dashoffset="' + C * (1 - Math.min(1, pct)) + '" transform="rotate(-90 22 22)"/></svg>';
 }
 function tiles(m, dt) {
-  const sv = (m.cats.get("savings") || 0) + m.invested, pct = S.goal > 0 ? sv / S.goal : 0;
-  const a = '<a class="tile" href="#ahorro">' + ring(pct, "var(--gold)") + '<div class="tt">Ahorro del mes</div><div class="tv amt">' + fmt(sv) + '</div><div class="sub">' + (S.goal ? Math.round(pct * 100) + "% de " + fmtC(S.goal) : "Define tu meta") + "</div></a>";
+  const sv = (m.cats.get("savings") || 0) + m.invested, gm = goalMonthly(), pct = gm > 0 ? sv / gm : 0;
+  const a = '<a class="tile" href="#ahorro">' + ring(pct, "var(--gold)") + '<div class="tt">Ahorro del mes</div><div class="tv amt">' + fmt(sv) + '</div><div class="sub">' + (gm ? Math.round(pct * 100) + "% de " + fmtC(gm) : "Define tu meta") + "</div></a>";
   let b;
   if (dt.act.length) {
     const nx = dt.act.slice().sort((x, y) => ((x.fecha_vencimiento || "9999") < (y.fecha_vencimiento || "9999") ? -1 : 1))[0], di = dueInfo(nx);
@@ -767,11 +767,21 @@ function budgetsView() {
   return out;
 };
 
-function goalInfo(P) {
+function goalCore() {
   const pl = S.plan; if (!(pl.target > 0)) return null;
-  const left = Math.max(0, pl.target - pl.got), el = pl.start ? Math.floor(daysBetween(pl.start, todayIso()) / 30) : 0;
-  const ml = Math.max(1, (pl.months || 12) - el), need = r2(left / ml), gap = Math.max(0, need - P.room);
-  return { left, ml, need, gap, pct: Math.min(100, (pl.got / pl.target) * 100) };
+  const ts = pl.startTs || (pl.start ? Date.parse(pl.start) : 0) || 0;
+  const add = S.tx.reduce((s2, t) => s2 + (!t.transfer && t.type === "expense" && t.categoryId === "savings" && (t.createdAt || 0) >= ts ? t.amount : 0), 0);
+  const got = r2((pl.got || 0) + add), left = Math.max(0, pl.target - got), el = pl.start ? Math.floor(daysBetween(pl.start, todayIso()) / 30) : 0;
+  const ml = Math.max(1, (pl.months || 12) - el);
+  return { got, left, ml, need: r2(left / ml), pct: Math.min(100, (got / pl.target) * 100) };
+}
+function goalInfo(P) { const c = goalCore(); return c ? Object.assign(c, { gap: Math.max(0, c.need - P.room) }) : null; }
+function goalMonthly() { if (S.goal > 0) return S.goal; const c = goalCore(); return c && c.left > 0 ? c.need : 0; }
+function heroInfo(P) {
+  const c = goalCore();
+  if (S.goal > 0) return { amt: S.goal, kind: "mine", label: "Tu meta de este mes" };
+  if (c && c.left > 0) return { amt: c.need, kind: "goal", label: "Para tu meta, aparta este mes" };
+  return { amt: P.rec, kind: "rec", label: "Ahorra este mes" };
 }
 function askCard() {
   if (!AI) return "";
@@ -779,13 +789,13 @@ function askCard() {
 }
 function numsCard(P) {
   const manual = S.plan.inc != null || S.plan.exp != null;
-  return '<section class="sec"><div class="sec-h"><h2>Mis números del mes</h2><button class="link" data-a="nums">Editar ' + ic("chev") + '</button></div><div class="card"><div class="kv"><span>Ingresos</span><span>' + fmt(P.income) + '</span></div><div class="kv"><span>Gastos</span><span>' + fmt(P.exp) + '</span></div><div class="kv"><span>Te sobran</span><span style="color:' + (P.room >= 0 ? "var(--ok)" : "var(--danger)") + '">' + fmt(P.room) + '</span></div><p class="hint">' + (manual ? "Usando los números que escribiste, no los de tus movimientos." : "Calculados con tus movimientos. Toca Editar para escribir los tuyos.") + "</p></div></section>";
+  return '<section class="sec"><div class="sec-h"><h2>Mis ingresos y gastos al mes</h2><button class="link" data-a="nums">Editar ' + ic("chev") + '</button></div><div class="card"><div class="kv"><span>Ingresos</span><span>' + fmt(P.income) + '</span></div><div class="kv"><span>Gastos</span><span>' + fmt(P.exp) + '</span></div><div class="kv"><span>Te sobran</span><span style="color:' + (P.room >= 0 ? "var(--ok)" : "var(--danger)") + '">' + fmt(P.room) + '</span></div><p class="hint">' + (manual ? "Usando los números que escribiste, no los de tus movimientos." : "Ahora uso lo que has registrado. Si prefieres, escribe más o menos cuánto ganas y gastas en un mes normal; no tiene que ser exacto.") + '</p><button class="btn ' + (manual ? "ghost" : "primary") + '" style="width:100%;margin-top:12px" data-a="nums">' + (manual ? "Cambiar mis números" : "Escribir cuánto gano y gasto al mes") + "</button></div></section>";
 }
 function goalSection(P) {
   const pl = S.plan, g = goalInfo(P);
   let h = '<section class="sec"><div class="sec-h"><h2>Mi meta para juntar</h2>' + (g ? '<button class="link" data-a="gset">Editar ' + ic("chev") + "</button>" : "") + "</div>";
   if (!g) return h + '<button class="card" style="display:block;width:100%;text-align:left" data-a="gset"><div class="row"><span class="ico" style="--h:85">🎯</span><div class="grow"><div class="ttl">¿Cuánto quieres juntar?</div><div class="sub">Dime la cantidad y los meses, y te armo el plan con tus números.</div></div>' + ic("chev") + "</div></button></section>";
-  h += '<div class="card"><div class="row" style="justify-content:space-between"><div><div class="sub">Quieres juntar</div><div class="amt" style="font-size:1.6rem;letter-spacing:-.03em">' + fmt(pl.target) + '</div></div><span class="badge">' + g.ml + (g.ml === 1 ? " mes restante" : " meses restantes") + '</span></div><div class="bar g" style="margin-top:12px"><i style="width:' + g.pct + '%"></i></div><div class="row" style="justify-content:space-between;margin-top:8px"><span class="sub">Llevas ' + fmt(pl.got) + '</span><span class="sub">' + Math.round(g.pct) + "%</span></div>";
+  h += '<div class="card"><div class="row" style="justify-content:space-between"><div><div class="sub">Quieres juntar</div><div class="amt" style="font-size:1.6rem;letter-spacing:-.03em">' + fmt(pl.target) + '</div></div><span class="badge">' + g.ml + (g.ml === 1 ? " mes restante" : " meses restantes") + '</span></div><div class="bar g" style="margin-top:12px"><i style="width:' + g.pct + '%"></i></div><div class="row" style="justify-content:space-between;margin-top:8px"><span class="sub">Llevas ' + fmt(g.got) + '</span><span class="sub">' + Math.round(g.pct) + "%</span></div>";
   if (g.left <= 0) h += '<p class="hint">🎉 ¡Meta lograda! Define otra cuando quieras.</p>';
   else {
     h += '<div class="kv" style="margin-top:12px"><span>Necesitas apartar</span><span>' + fmt(g.need) + ' al mes</span></div><div class="kv"><span>Equivale a</span><span>' + fmt(g.need / 4.33) + ' por semana</span></div><div class="kv"><span>Te sobran con tus números</span><span>' + fmt(Math.max(0, P.room)) + " al mes</span></div>";
@@ -798,15 +808,15 @@ function goalSection(P) {
       h += '<p class="hint" style="color:var(--warn)">Te faltan ' + fmt(g.gap) + " al mes. Opciones:</p>" + o.map((x) => '<div class="sub wrap" style="color:var(--fg);margin-top:6px">' + esc(x) + "</div>").join("");
     }
   }
-  return h + '<div class="actions h" style="margin-top:14px"><button class="btn primary" data-a="gadd">Abonar</button>' + (g.left > 0 ? '<button class="btn ghost" data-a="gnow">Usar como meta</button>' : "") + "</div></div></section>";
+  return h + '<div class="actions h" style="margin-top:14px"><button class="btn primary" data-a="gadd">Abonar</button>' + "" + "</div></div></section>";
 }
 function openNums() {
   const val = (x) => (x != null ? String(r2(x)) : ""), has = S.plan.inc != null || S.plan.exp != null;
   const upd = () => { const a = num($("#m-inc", cur.el).value) || 0, b = num($("#m-exp", cur.el).value) || 0; $("#m-prev", cur.el).textContent = a || b ? "Te sobrarían " + fmt(a - b) + (a > 0 ? " (" + Math.round(((a - b) / a) * 100) + "% de tu ingreso)" : "") : ""; };
   const fld = (id, lbl, v) => '<div class="field"><label for="' + id + '">' + lbl + '</label><div class="amount"><span>' + esc(sym()) + '</span><input id="' + id + '" inputmode="decimal" autocomplete="off" placeholder="0" value="' + esc(v) + '"></div></div>';
   openSheet({
-    title: "Mis números del mes",
-    html: '<p class="sub">Escribe cuánto ingresaste este mes y cuánto gastas. El plan de ahorro usará estos datos en vez de tus movimientos.</p>' + fld("m-inc", "Ingresos del mes", val(S.plan.inc)) + fld("m-exp", "Gastos del mes", val(S.plan.exp)) + '<p class="hint" id="m-prev"></p><div class="actions"><button class="btn primary" data-a="ok">Guardar</button>' + (has ? '<button class="btn ghost" data-a="auto">Usar los de mis movimientos</button>' : "") + "</div>",
+    title: "Mis ingresos y gastos",
+    html: '<p class="sub">Pon más o menos cuánto ganas y cuánto gastas en un mes normal. No tiene que ser exacto. El plan de ahorro usará estos números en vez de tus movimientos.</p>' + fld("m-inc", "Ingresos al mes (aprox.)", val(S.plan.inc)) + fld("m-exp", "Gastos al mes (aprox.)", val(S.plan.exp)) + '<p class="hint" id="m-prev"></p><div class="actions"><button class="btn primary" data-a="ok">Guardar</button>' + (has ? '<button class="btn ghost" data-a="auto">Usar los de mis movimientos</button>' : "") + "</div>",
     onInput: (e) => { if (e.target.id === "m-inc" || e.target.id === "m-exp") { e.target.value = e.target.value.replace(/[^\d.,]/g, ""); upd(); } },
     acts: {
       ok() { const a = $("#m-inc", cur.el).value.trim(), b = $("#m-exp", cur.el).value.trim(); S.plan.inc = a === "" ? null : Math.max(0, num(a) || 0); S.plan.exp = b === "" ? null : Math.max(0, num(b) || 0); persist("plan"); closeSheet(); render(); toast("Números guardados"); },
@@ -816,15 +826,15 @@ function openNums() {
   upd();
 }
 function openGoal() {
-  const pl = S.plan;
+  const pl = S.plan, cc = goalCore();
   const upd = () => { const t = num($("#g-t", cur.el).value) || 0, m = Math.round(num($("#g-m", cur.el).value) || 0), P = planData(); $("#g-prev", cur.el).textContent = t > 0 && m > 0 ? "≈ " + fmt(t / m) + " al mes · " + fmt(t / m / 4.33) + " por semana" + (P.room > 0 ? (t / m <= P.room ? " · te alcanza ✅" : " · hoy te sobran " + fmt(P.room)) : "") : ""; };
   openSheet({
     title: pl.target ? "Editar mi meta" : "Mi meta para juntar",
-    html: '<div class="field"><label for="g-t">¿Cuánto quieres juntar?</label><div class="amount"><span>' + esc(sym()) + '</span><input id="g-t" inputmode="decimal" autocomplete="off" placeholder="0" value="' + (pl.target || "") + '"></div></div><div class="field"><label for="g-m">¿En cuántos meses?</label><input id="g-m" inputmode="numeric" autocomplete="off" placeholder="Ej. 12" maxlength="3" value="' + (pl.months || "") + '"></div><p class="hint" id="g-prev"></p><div class="actions"><button class="btn primary" data-a="ok">Guardar meta</button>' + (pl.target ? '<button class="btn danger" data-a="rm">Quitar meta</button>' : "") + "</div>",
-    onInput: (e) => { if (e.target.id === "g-t") e.target.value = e.target.value.replace(/[^\d.,]/g, ""); if (e.target.id === "g-m") e.target.value = e.target.value.replace(/\D/g, ""); upd(); },
+    html: '<div class="field"><label for="g-t">¿Cuánto quieres juntar?</label><div class="amount"><span>' + esc(sym()) + '</span><input id="g-t" inputmode="decimal" autocomplete="off" placeholder="0" value="' + (pl.target || "") + '"></div></div><div class="field"><label for="g-m">¿En cuántos meses?</label><input id="g-m" inputmode="numeric" autocomplete="off" placeholder="Ej. 12" maxlength="3" value="' + (pl.months || "") + '"></div><div class="field"><label for="g-got">¿Cuánto llevas ya? (opcional)</label><div class="amount"><span>' + esc(sym()) + '</span><input id="g-got" inputmode="decimal" autocomplete="off" placeholder="0" value="' + (cc && cc.got ? cc.got : "") + '"></div></div><p class="hint" id="g-prev"></p><div class="actions"><button class="btn primary" data-a="ok">Guardar meta</button>' + (pl.target ? '<button class="btn danger" data-a="rm">Quitar meta</button>' : "") + "</div>",
+    onInput: (e) => { if (e.target.id === "g-t" || e.target.id === "g-got") e.target.value = e.target.value.replace(/[^\d.,]/g, ""); if (e.target.id === "g-m") e.target.value = e.target.value.replace(/\D/g, ""); upd(); },
     acts: {
-      ok() { const t = num($("#g-t", cur.el).value), m = Math.round(num($("#g-m", cur.el).value)); if (!(t > 0)) return toast("Escribe cuánto quieres juntar"); if (!(m >= 1 && m <= 600)) return toast("Escribe los meses (1 a 600)"); pl.target = r2(t); pl.months = m; pl.start = todayIso(); persist("plan"); closeSheet(); render(); toast("Meta guardada"); },
-      rm() { S.plan.target = 0; S.plan.months = 0; S.plan.got = 0; S.plan.start = ""; persist("plan"); closeSheet(); render(); },
+      ok() { const t = num($("#g-t", cur.el).value), m = Math.round(num($("#g-m", cur.el).value)); if (!(t > 0)) return toast("Escribe cuánto quieres juntar"); if (!(m >= 1 && m <= 600)) return toast("Escribe los meses (1 a 600)"); const gv = num($("#g-got", cur.el).value); pl.got = isFinite(gv) && gv > 0 ? r2(gv) : 0; pl.target = r2(t); pl.months = m; pl.start = todayIso(); pl.startTs = Date.now(); S.goal = 0; persist("plan", "goal"); closeSheet(); render(); toast("Meta guardada"); },
+      rm() { S.plan.target = 0; S.plan.months = 0; S.plan.got = 0; S.plan.start = ""; S.plan.startTs = 0; persist("plan"); closeSheet(); render(); },
     },
   });
   upd();
@@ -840,7 +850,7 @@ function assistantContext() {
   const cats = Array.from(P.a.cats.entries()).sort((x, y) => y[1] - x[1]).slice(0, 6).map((x) => cat(x[0]).n + " " + fmt(x[1])).join(", ") || "sin gastos registrados";
   return ["Moneda: " + S.cur, "Ingreso mensual (" + (S.plan.inc != null ? "lo escribió la persona" : "según sus movimientos") + "): " + fmt(P.income), "Gastos mensuales: " + fmt(P.exp) + " | Sobrante: " + fmt(P.room),
     "Ahorro sugerido por la app: " + fmt(P.rec) + " | Ahorrado o invertido este mes: " + fmt(P.saved), "Meta de ahorro mensual: " + (S.goal ? fmt(S.goal) : "ninguna"),
-    "Meta para juntar: " + (g ? fmt(S.plan.target) + " en " + S.plan.months + " meses; lleva " + fmt(S.plan.got) + "; debe apartar " + fmt(g.need) + " al mes; quedan " + g.ml + " meses" : "ninguna"),
+    "Meta para juntar: " + (g ? fmt(S.plan.target) + " en " + S.plan.months + " meses; lleva " + fmt(g.got) + "; debe apartar " + fmt(g.need) + " al mes; quedan " + g.ml + " meses" : "ninguna"),
     "Fondo de emergencia actual: " + fmt(P.fund) + " (ideal 3 meses de gastos = " + fmt(P.exp * 3) + ")", "Gastos del mes por categoría: " + cats,
     "Deudas activas: " + (dt.act.length ? dt.act.map((d) => d.nombre + " saldo " + fmt(d.saldo_pendiente) + (d.tasa_interes ? " interés " + d.tasa_interes + "% anual" : "") + (d.pago_minimo ? " mínimo " + fmt(d.pago_minimo) : "")).join("; ") : "ninguna")].join("\n");
 }
@@ -920,14 +930,17 @@ VIEWS.ahorro = function () {
   const P = planData();
   let out = head("Tu plan", "Ahorro", AI ? '<button class="iconbtn" data-a="ask" aria-label="Asistente de ahorro">' + ic("spark") + "</button>" : "");
   if (!P.income) return out + empty("🌱", "Cuéntame cuánto ganas", "Escribe tu ingreso y tus gastos del mes y armo un plan de ahorro a tu medida.") + '<div class="actions"><button class="btn primary" data-a="nums">Escribir mis números</button></div>' + budgetsView();
-  const rem = Math.max(0, P.rec - P.saved), wk = Math.max(1, Math.ceil((P.dim - P.day + 1) / 7)), pct = P.rec > 0 ? Math.min(100, (P.saved / P.rec) * 100) : 0;
-  const iPct = (v) => Math.max(0, Math.min(100, (v / P.income) * 100)), expW = iPct(P.exp), savW = Math.min(100 - expW, iPct(P.rec));
-  out += '<div class="hero"><i class="gl"></i><p class="lbl">Ahorra este mes</p><div class="big" data-count="' + P.rec + '" data-ck="plan">' + fmt(P.rec) + "</div>" +
-    '<p class="lbl" style="margin-top:10px;font-size:13px">' + Math.round((P.rec / P.income) * 100) + "% de tu ingreso de " + fmt(P.income) + " (" + P.src + ")</p>" +
+  const H = heroInfo(P), amt = H.amt, gc = goalCore();
+  const rem = Math.max(0, amt - P.saved), wk = Math.max(1, Math.ceil((P.dim - P.day + 1) / 7)), pct = amt > 0 ? Math.min(100, (P.saved / amt) * 100) : 0;
+  const iPct = (v) => Math.max(0, Math.min(100, (v / P.income) * 100)), expW = iPct(P.exp), savW = Math.min(100 - expW, iPct(amt));
+  const sub = H.kind === "goal" ? "Meta de " + fmt(S.plan.target) + " · llevas " + fmt(gc.got) + " (" + Math.round(gc.pct) + "%) · " + gc.ml + (gc.ml === 1 ? " mes restante" : " meses restantes") : Math.round((amt / P.income) * 100) + "% de tu ingreso de " + fmt(P.income) + " (" + P.src + ")";
+  const fit = amt <= 0 ? "" : amt > P.room + 0.5 ? '<p class="lbl" style="margin-top:6px;font-size:13px;color:var(--gold)">Con tus números te faltan ' + fmt(amt - Math.max(0, P.room)) + " al mes. Mira las opciones abajo o ajusta tu meta.</p>" : '<p class="lbl" style="margin-top:6px;font-size:13px">✅ Te alcanza con lo que te sobra.</p>';
+  out += '<div class="hero"><i class="gl"></i><p class="lbl">' + H.label + '</p><div class="big" data-count="' + amt + '" data-ck="plan">' + fmt(amt) + "</div>" +
+    '<p class="lbl" style="margin-top:10px;font-size:13px">' + sub + '</p><button style="background:none;border:0;padding:0;margin-top:6px;color:rgb(255 255 255 / .85);text-decoration:underline;font-size:13px" data-a="nums">Cambiar mis ingresos y gastos ›</button>' +
     '<div class="split" aria-hidden="true"><i style="width:' + expW + '%;background:oklch(0.72 0.16 22)"></i><i style="width:' + savW + '%;background:var(--gold)"></i><i style="flex:1;background:var(--glow)"></i></div>' +
-    '<div class="three"><div><div class="k"><b style="background:oklch(0.72 0.16 22)"></b>Gastos</div><div class="v">' + fmtC(P.exp) + '</div></div><div><div class="k"><b style="background:var(--gold)"></b>Ahorro</div><div class="v">' + fmtC(P.rec) + '</div></div><div><div class="k"><b style="background:var(--glow)"></b>Libre</div><div class="v">' + fmtC(Math.max(0, P.income - P.exp - P.rec)) + "</div></div></div>" +
-    '<div style="margin-top:22px"><div class="row" style="justify-content:space-between;font-size:13px;color:rgb(255 255 255 / .72)"><span>Llevas ' + fmt(P.saved) + "</span><span>" + Math.round(pct) + '%</span></div><div class="split" style="margin-top:8px"><i style="width:' + pct + '%;background:var(--gold)"></i></div><p class="lbl" style="margin-top:8px;font-size:13px">' + (P.rec <= 0 ? "Tus gastos igualan tu ingreso: empieza por los consejos de abajo." : rem > 0 ? "Te faltan " + fmt(rem) + ": son " + fmt(rem / wk) + " por semana." : "¡Meta del mes cumplida! 🎉") + "</p></div>" +
-    '<div class="actions h" style="margin-top:16px"><button class="btn gold" data-a="save-now">' + (rem > 0 ? "Registrar ahorro" : "Ahorrar más") + "</button>" + (P.rec > 0 && Math.abs(S.goal - P.rec) > 0.5 ? '<button class="btn ghostw" data-a="use-goal">Usar como meta</button>' : "") + "</div></div>";
+    '<div class="three"><div><div class="k"><b style="background:oklch(0.72 0.16 22)"></b>Gastos</div><div class="v">' + fmtC(P.exp) + '</div></div><div><div class="k"><b style="background:var(--gold)"></b>Ahorro</div><div class="v">' + fmtC(amt) + '</div></div><div><div class="k"><b style="background:var(--glow)"></b>Libre</div><div class="v">' + fmtC(Math.max(0, P.income - P.exp - amt)) + "</div></div></div>" + fit +
+    '<div style="margin-top:20px"><div class="row" style="justify-content:space-between;font-size:13px;color:rgb(255 255 255 / .72)"><span>Este mes llevas ' + fmt(P.saved) + "</span><span>" + Math.round(pct) + '%</span></div><div class="split" style="margin-top:8px"><i style="width:' + pct + '%;background:var(--gold)"></i></div><p class="lbl" style="margin-top:8px;font-size:13px">' + (amt <= 0 ? "Tus gastos igualan tu ingreso: empieza por los consejos de abajo." : rem > 0 ? "Te faltan " + fmt(rem) + " este mes: son " + fmt(rem / wk) + " por semana." : "¡Meta del mes cumplida! 🎉") + "</p></div>" +
+    '<div class="actions h" style="margin-top:16px"><button class="btn gold" data-a="save-now">' + (rem > 0 ? "Registrar ahorro" : "Ahorrar más") + "</button>" + (H.kind === "rec" && amt > 0 ? '<button class="btn ghostw" data-a="use-goal">Usar como meta</button>' : "") + "</div></div>";
   out += askCard() + numsCard(P) + goalSection(P);
   out += '<section class="sec"><div class="sec-h"><h2>Elige tu nivel</h2><button class="link" data-a="goal">Meta manual ' + ic("chev") + '</button></div><div class="card list">' + P.lv.map((l, i) => {
     const mine = S.goal > 0 && Math.abs(S.goal - l.amt) < 0.5;
@@ -1262,15 +1275,15 @@ let bt; function scheduleBackup() { if (!cloud.ok || !cloud.auto) return; clearT
 const ACT = {
   close() { closeSheet(); },
   lvl(el) { S.goal = r2(Number(el.dataset.v)); persist("goal"); render(); buzz(8); toast("Meta mensual: " + fmt(S.goal)); },
-  "use-goal"() { S.goal = planData().rec; persist("goal"); render(); toast("Meta mensual: " + fmt(S.goal)); },
-  "save-now"() { const P = planData(), rem = Math.max(0, P.rec - P.saved), wk = Math.max(1, Math.ceil((P.dim - P.day + 1) / 7)); openTx(null, { mode: "expense", cat: "savings", amount: rem > 0 ? String(r2(rem / wk)) : "" }); },
+  "use-goal"() { S.goal = r2(heroInfo(planData()).amt); persist("goal"); render(); toast("Meta mensual: " + fmt(S.goal)); },
+  "save-now"() { const P = planData(), rem = Math.max(0, heroInfo(P).amt - P.saved), wk = Math.max(1, Math.ceil((P.dim - P.day + 1) / 7)); openTx(null, { mode: "expense", cat: "savings", amount: rem > 0 ? String(r2(rem / wk)) : "" }); },
   "add-income"() { openTx(null, { mode: "income", cat: "salary" }); },
   paynow(el) { openPay(el.dataset.id); },
   dstrat(el) { S.plan.dstrat = el.dataset.v; persist("plan"); render(); },
   dbudget() { numSheet({ title: "Pago mensual para deudas", prefix: sym(), value: S.plan.dbudget || "", removable: !!S.plan.dbudget, help: "Cuánto puedes destinar cada mes a pagar todas tus deudas juntas.", onSave(v) { S.plan.dbudget = v; persist("plan"); render(); }, onRemove() { S.plan.dbudget = 0; persist("plan"); render(); } }); },
   nums() { openNums(); },
   gset() { openGoal(); },
-  gadd() { numSheet({ title: "Abonar a mi meta", prefix: sym(), value: "", help: "Lo que acabas de apartar para juntar tu meta.", onSave(v) { if (!(v > 0)) return; S.plan.got = r2(S.plan.got + v); persist("plan"); render(); toast("Abonaste " + fmt(v)); } }); },
+  gadd() { openTx(null, { mode: "expense", cat: "savings", amount: "" }); },
   gnow() { const g = goalInfo(planData()); if (!g) return; S.goal = r2(g.need); persist("goal"); render(); toast("Meta mensual: " + fmt(S.goal)); },
   ask() { openChat(); },
   undo() { if (toast.undo) { toast.undo(); toast.undo = null; $("#toast").classList.remove("in"); } },
